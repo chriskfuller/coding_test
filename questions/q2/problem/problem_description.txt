@@ -1,0 +1,189 @@
+INSTRUCTIONS:
+
+    1. Read the below definitions and descriptions. You will need a Python3 installation
+    and the ability to pip install packages into the environment you use.
+    2. Write your solution for tasks 2 through 5 in solution.py. You can add to or edit the
+    code given to you as you see fit, as well as add new .py files, but solution.py should
+    have a function that calls all of the components of your solution. You may not use any
+    software packages other than built-in python packages and the packages listed in
+    requirements.txt.
+    3. Return a zip archive of all of the code used by your solution as well as your updated
+    version of the sqlite DB.
+    4. You will mainly be evaluated based on the accuracy of the microhomology sequences you
+    report, but your code will also be evaluated for efficiency and style.
+
+FILES GIVEN:
+
+    1. requirements.txt, which lists the python packages you will need to complete this project.
+    2. coordinate.py, which has skeleton code for coordinate classes.
+    3. fasta_querier.py, which has complete code for a fasta querier.
+    4. amplicons_and_deletions.sqlite, a sqlite database with the following tables:
+
+        amplicons:
+            amplicon_id (int)
+            fwd_primer_location (str, coordinate string of fwd primer produced by
+                                 OneBasedCoordinate.string_value)
+            rev_primer_location (str, coordinate string of rev primer produced by
+                                 OneBasedCoordinate.string_value)
+
+        deletions:
+            amplicon_id (int, foreign key to amplicons.amplicon_id)
+            deletion_start (int, zero-based index of first deleted position relative
+                            to the start of the amplicon on the positive strand)
+            deletion_stop (int, zero-based index of first position after the deletion
+                           relative to the start of the amplicon on the positive strand)
+            microhomology_seq (str)
+
+    5. hg38_mini.fasta, a miniaturized version of hg38 (the human genome) in fasta format.
+
+PROBLEM DESCRIPTION AND BACKGROUND:
+
+    Your ultimate goal is to fill in the "microhomology_seq" column in the "deletions" table
+    in the sqlite database provided to you (amplicons_and_deletions.sqlite). Before
+    describing the task in detail, here is some background information you will need:
+
+        1.  Genomic coordinates: genomes are collections of long pieces of DNA called
+            chromosomes. We can represent parts of the genomes using coordinates; for example,
+            the coordinate "chr1:123-456,+" refers to chromosome 1 from position 123 to
+            position 456 on the positive strand (every piece of double-stranded DNA has two
+            strands, arbitrarily called the positive/forward and negative/reverse strands).
+
+        2.  Amplicons: Polymerase Chain Reactions (PCRs) are often used to "amplify"
+            a region of a larger piece of DNA (usually a genome or a plasmid) by repeatedly
+            replicating that region such that there are enough copies of to easily sequence.
+            In a PCR, the amplicon is defined by two short (~20 nucleotide) pieces of DNA,
+            called "primers", which anneal to the source DNA and provide a starting substrate
+            for a polymerase to synthesize a copy of the source DNA. We call one of these
+            primers the "forward" primer and the other the "reverse" primer, where the
+            forward primer is on the forward/positive strand and the reverse primer is on
+            the reverse/negative strand.
+
+            The sequence of the genome that is amplified is defined by the sequences of the
+            primers that are used. For example, if the forward primer is the sequence at
+            "chr1:1-20,+" of the genome and the reverse primer is at "chr1:80-100,-" of the
+            genome, the amplified sequence will be the sequence at "chr1:1-100" of the genome
+            (PCRs create double-stranded DNA, so both strands are synthesized).
+
+        3.  Deletions: a deletion is simply a contiguous region of DNA that has been removed
+            from a larger piece of DNA:
+
+                Reference genome:   .....TTCTTACAGTCACATCACAGAGCAGAAGGGGCAAG.....
+                Genome w/ deletion: .....TTCTTACAGTCA-----------AGAAGGGGCAAG.....
+
+            Deletions are a common product of DNA repair following cleavage by endonucleases
+            like Cas9.
+
+        4.  Microhomology sequences: microhomology sequences are a feature of some deletions
+            created by the microhomology-mediated end joining (MMEJ) DNA repair pathway. In
+            response to a double-strand break (DSB), the MMEJ pathway can repair the break
+            by annealing two short homologous sequences on either side of the break:
+
+                                               DSB
+                                                ^
+                    .....TAGCCCAAGCTGCTCAGGAGGC | GTGAGGCAGGAGAATGACA.....
+                    .....ATCGGGTTCGACGAGTCCTCCG | CACTCCGTCCTCTTACTGT.....
+
+                                                |  5'-3' end resection
+                                                V
+
+                    .....TAGCCCAAGCTGCTCAGGAGGC                 TGACA.....
+                    .....ATCGGGTTC                CACTCCGTCCTCTTACTGT.....
+
+                                                |  annealing of microhomology sequences
+                                                V
+
+                    .....TAGCCCAAGCTGCTCAGGAGGC
+                    .....ATCGGGTTC        |||||       TGACA.....
+                                        CACTCCGTCCTCTTACTGT.....
+                                        ^^
+                                       flap
+                                                |  flap removal, fill-in synthesis, ligation
+                                                V
+
+                    .....TAGCCCAAGCTGCTCAGGAGGCAGGAGAATGACA.....
+                    .....ATCGGGTTCGACGAGTCCTCCGTCCTCTTACTGT.....
+
+            The microhomology sequence in the above example is "GAGGC" (or "GCCTC" on the reverse
+            strand). When comparing the resulting DNA sequence to the original DNA sequence, we
+            can see that a deletion has been created:
+
+                Original sequence:  .....TAGCCCAAGCTGCTCAGGAGGCGTGAGGCAGGAGAATGACA.....
+                Post-MMEJ sequence: .....TAGCCCAAGCTGCTCAGGAGGC-------AGGAGAATGACA.....
+                                                               ^^^^^^^
+                                                               deletion
+
+            How can we identify the microhomology sequence based on the deletion coordinates
+            and the surrounding sequence? That is up to you to figure out. One VERY important
+            observation to note is that deletions with microhomology sequences by definition
+            have ambiguous coordinates; that is, the deletion coordinates can be "shifted" left
+            and right without changing the resulting sequence:
+
+                Original sequence:  .....TAGCCCAAGCTGCTCAGGAGGCGTGAGGCAGGAGAATGACA.....
+                Post-MMEJ sequence: .....TAGCCCAAGCTGCTCAGGAGGC-------AGGAGAATGACA.....
+
+                                                |
+                                                V
+
+                Original sequence:  .....TAGCCCAAGCTGCTCAGGAGGCGTGAGGCAGGAGAATGACA.....
+                Post-MMEJ sequence: .....TAGCCCAAGCTGCTCAG-------GAGGCAGGAGAATGACA.....
+
+            Note that the post-MMEJ sequences in the above alignments have the exact same DNA
+            sequence! Also note that these are not the only equivalent coordinates for this
+            particular deletion. You should think carefully about how this affects identifying
+            the microhomology sequence (if it exists).
+
+TASKS:
+
+    1. Fill in missing methods/variables in coordinate.py.
+
+        a) Fill in the Coordinate._pattern class variable and use it to implement
+        Coordinate.parse_string. Refer to the string_value and string_value_unstranded
+        properties on the Coordinate subclasses to see possible string representations
+        of coordinates, and be sure to read the Coordinate.parse_string docstring.
+        You can add additional variables and methods to any of the classes.
+
+        b) Implement Coordinate.__init__, making use of your Coordinate.parse_string
+        implementation. Note that the inputs are flexible as described in the docstring.
+        You should cover all cases described in the docstring.
+
+        c) Implement Coordinate.union as described in the docstring.
+
+    2. Query the DB to get each amplicon and the deletions associated with that amplicon.
+
+        a) The forward/reverse primer coordinates in the DB are one-based coordinate strings
+        produced by the OneBasedCoordinate.string_value property.
+
+        b) The deletion coordinates (deletion_start and deletion_end) represent a zero-based
+        half-open interval of the deleted sequence relative to the amplicon on the positive
+        strand. For example:
+
+            amplicon sequence (+ strand):  TAGCCCAAGCTGCTCAGGAGGCGTGAGGCAGGAGAATGACA
+            amplicon post-deletion:        TAGCCCAAGCTGCTCAG-------GAGGCAGGAGAATGACA
+            deletion_start: 17
+            deletion_end: 24
+
+    3. Extract the sequence of each amplicon using the locations of the forward and
+    reverse primers.
+
+        a) We recommend using the Coordinate classes/methods implemented in task 1 along with
+        the FastaQuerier class in fasta_querier.py. Given a Coordinate, "coord", and the path
+        to a genome in fasta format, "fasta_path", you can extract the sequence at that
+        coordinate with:
+
+            > coord = OneBasedCoordinate('chr1', 123, 456)
+            > fasta_querier = FastaQuerier(fasta_path)
+            > sequence = fasta_querier.retrieve_sequence(coord)
+
+    4. Using the amplicon sequence and the deletion coordinates, identify the longest microhomology
+    sequence (if any) possible given the coordinates of each deletion.
+
+        a) Microhomology sequences are described above.
+        b) Only consider fully-matched microhomology sequences (i.e. no mismatches allowed).
+        c) The microhomology sequence may extend past the amplicon sequence. In that case,
+        only report the portion of the microhomology sequence within the amplicon.
+        d) Technically, the location of the DSB sets bounds on where the microhomology sequence
+        can be. For the purposes of this analysis, you can assume the DSB occurred at any
+        position required to produce the longest microhomology sequence possible.
+
+    5. For each deletion with a microhomology sequence ≥2nt, update the deletions.microhomology_seq
+    column with the microhomology sequence relative to the positive strand of the genome.
